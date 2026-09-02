@@ -66,7 +66,7 @@ def geometry(path: Path) -> dict[str, object]:
 
 
 def main() -> None:
-    frames_root = Path(sys.argv[1] if len(sys.argv) > 1 else "public/assets/characters/4-archive/frames")
+    frames_root = Path(sys.argv[1] if len(sys.argv) > 1 else "public/assets/characters/4/frames")
     output = Path(sys.argv[2] if len(sys.argv) > 2 else frames_root / "collision.json")
     canonical = [
         "attack",
