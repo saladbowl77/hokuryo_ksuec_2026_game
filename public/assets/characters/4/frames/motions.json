@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "facing": "right",
+  "motions": [
+    { "id": "attack", "label": "攻撃", "file": "attack/attack.png" },
+    { "id": "backward_guard", "label": "後ろ下がりガード", "file": "backward_guard/backward_guard.png" },
+    { "id": "jump_vertical", "label": "ジャンプ垂直", "file": "jump_vertical/jump_vertical.png" },
+    { "id": "jump_forward", "label": "ジャンプ前", "file": "jump_forward/jump_forward.png" },
+    { "id": "jump_backward", "label": "ジャンプ後ろ", "file": "jump_backward/jump_backward.png" },
+    { "id": "idle", "label": "待機中", "file": "idle/idle.png" },
+    { "id": "jump_attack", "label": "ジャンプ攻撃", "file": "jump_attack/jump_attack.png" },
+    { "id": "crouch", "label": "しゃがみ", "file": "crouch/crouch.png" },
+    { "id": "crouch_slide_attack", "label": "しゃがみ(スライド)攻撃", "file": "crouch_slide_attack/crouch_slide_attack.png" },
+    { "id": "hit", "label": "攻撃を受けた時", "file": "hit/hit.png" },
+    { "id": "down", "label": "ダウンした時", "file": "down/down.png" }
+  ]
+}
