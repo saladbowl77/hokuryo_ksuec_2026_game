@@ -9,67 +9,63 @@ export interface CharacterDef {
   available: boolean;
 }
 
-export const POSE_NAMES = [
-  'idle1',
-  'idle2',
-  'idle3',
-  'idle4',
-  'walk1',
-  'walk2',
-  'jump1',
-  'jump2',
+/**
+ * The canonical motions, one PNG per motion under
+ * `public/assets/characters/<id>/frames/<motion>/<motion>.png`, mirroring
+ * that folder's `motions.json`. All frames share a normalized 1536px canvas,
+ * so no per-motion scale correction is needed. `collision.json` in the same
+ * folder carries an alpha-derived outer hull for each of these.
+ */
+export const MOTION_IDS = [
+  'idle',
+  'attack',
+  'backward_guard',
   'jump_vertical',
-  'jump_back',
-  'guard_stand',
-  'guard_crouch',
-  'punch_windup',
-  'punch_active',
-  'hit2',
-  'hit3',
-  'down1',
-  'down2',
-  'down3',
-  'down4',
-  'down5',
-  'down6',
+  'jump_forward',
+  'jump_backward',
+  'jump_attack',
+  'crouch',
+  'crouch_slide_attack',
+  'hit',
+  'down',
 ] as const;
 
-export type PoseName = (typeof POSE_NAMES)[number];
+export type MotionId = (typeof MOTION_IDS)[number];
 
-const POSE_GROUPS: Record<PoseName, string> = {
-  idle1: 'idle',
-  idle2: 'idle',
-  idle3: 'idle',
-  idle4: 'idle',
-  walk1: 'walk',
-  walk2: 'walk',
-  jump1: 'jump',
-  jump2: 'jump',
-  jump_vertical: 'jump',
-  jump_back: 'jump',
-  guard_stand: 'guard',
-  guard_crouch: 'guard',
-  punch_windup: 'punch',
-  punch_active: 'punch',
-  hit2: 'hit',
-  hit3: 'hit',
-  down1: 'down',
-  down2: 'down',
-  down3: 'down',
-  down4: 'down',
-  down5: 'down',
-  down6: 'down',
-};
-
-export function poseKey(portraitKey: string, pose: PoseName) {
-  return `${portraitKey}_${pose}`;
+export function motionKey(portraitKey: string, motion: MotionId) {
+  return `${portraitKey}__${motion}`;
 }
 
-/** Per-pose scale correction on top of the shared, normalized 1536px canvas. */
-export const POSE_SCALE_CORRECTION: Partial<Record<PoseName, number>> = {};
+export function motionImagePath(characterId: number, motion: MotionId) {
+  return `/assets/characters/${characterId}/frames/${motion}/${motion}.png`;
+}
 
-export function poseFramePath(characterId: number, pose: PoseName) {
-  return `/assets/characters/${characterId}-archive/frames/${POSE_GROUPS[pose]}/${pose}.png`;
+export function collisionKey(portraitKey: string) {
+  return `${portraitKey}__collision`;
+}
+
+export function collisionPath(characterId: number) {
+  return `/assets/characters/${characterId}/frames/collision.json`;
+}
+
+/**
+ * Knockdown is a genuine multi-frame sequence (stagger → fall → flat), unlike
+ * the other motions which are a single pose. The frames live at
+ * `frames/down/down1..down6.png` and are NOT on the shared 1536px canvas
+ * (they came from the archived sheet), so Fighter scales them separately and
+ * they have no `collision.json` entry.
+ */
+export const KO_SEQUENCE_LENGTH = 6;
+/** Standing character height (px) in the archived sheet the KO frames came
+ * from — used to rescale them to match the current 1536px art. */
+export const KO_SOURCE_REF_HEIGHT = 395;
+
+export function koFrameKey(portraitKey: string, index: number) {
+  return `${portraitKey}__ko${index}`;
+}
+
+export function koFramePath(characterId: number, index: number) {
+  return `/assets/characters/${characterId}/frames/down/down${index}.png`;
 }
 
 export const CHARACTERS: CharacterDef[] = [

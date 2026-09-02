@@ -33,6 +33,10 @@ const config: Phaser.Types.Core.GameConfig = {
 };
 
 const game = new Phaser.Game(config);
+if (import.meta.env.DEV) {
+  // Handy for poking at scene state from the devtools console during dev.
+  (window as unknown as { __game: Phaser.Game }).__game = game;
+}
 
 window.addEventListener('resize', () => {
   game.scale.resize(window.innerWidth, window.innerHeight);

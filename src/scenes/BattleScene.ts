@@ -7,6 +7,7 @@ import { getCharacter } from '../data/characters';
 import { loadControlConfig, type SideControl } from '../data/controlSettings';
 import type { FighterInput } from '../entities/FighterInput';
 import { FPS, FRAME_MS, secondsToFrames } from '../core/time';
+import { debug } from '../core/debug';
 
 /** Reads one frame of input for a fighter. `self`/`opponent` are only used by
  * the CPU reader; keyboard/gamepad readers ignore them. */
@@ -54,6 +55,9 @@ export class BattleScene extends Phaser.Scene {
   private frameAccumulatorMs = 0;
   private roundOver = false;
 
+  private debugGfx!: Phaser.GameObjects.Graphics;
+  private debugText!: Phaser.GameObjects.Text;
+
   constructor() {
     super('BattleScene');
   }
@@ -84,6 +88,7 @@ export class BattleScene extends Phaser.Scene {
     this.p2IsCpu = controls.p2.type === 'cpu';
 
     this.createHud();
+    this.createDebugOverlay();
     this.centerCameraInitial();
 
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize, this);
@@ -155,6 +160,74 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(100);
   }
 
+  private createDebugOverlay() {
+    this.debugGfx = this.add.graphics().setDepth(50);
+    this.debugText = this.add
+      .text(12, 72, '', {
+        fontSize: '13px',
+        color: '#9dff9d',
+        fontFamily: 'monospace',
+        lineSpacing: 3,
+        backgroundColor: 'rgba(0,0,0,0.55)',
+        padding: { x: 6, y: 4 },
+      })
+      .setScrollFactor(0)
+      .setDepth(200);
+
+    const kb = this.input.keyboard!;
+    kb.addCapture('F1');
+    kb.on('keydown-F1', () => debug.toggle());
+  }
+
+  /** Redraws the collision-debug overlay (F1). Pure rendering — runs every
+   * frame, not per simulation tick. */
+  private drawDebug() {
+    const g = this.debugGfx;
+    g.clear();
+    g.setVisible(debug.enabled);
+    this.debugText.setVisible(debug.enabled);
+    if (!debug.enabled) return;
+
+    for (const f of [this.player, this.opponent]) {
+      g.fillStyle(0xffff00, 1);
+      g.fillCircle(f.x, f.y, 3);
+      if (f.state === 'ko') continue; // KO frames aren't in collision.json
+
+      const body = f.body as Phaser.Physics.Arcade.Body;
+      g.lineStyle(1, 0xffffff, 0.5);
+      g.strokeRect(body.x, body.y, body.width, body.height);
+
+      const hull = f.hurtboxPolygon();
+      if (hull.length >= 2) {
+        g.lineStyle(1, 0x00e5ff, 0.9);
+        g.beginPath();
+        g.moveTo(hull[0].x, hull[0].y);
+        for (let i = 1; i < hull.length; i++) g.lineTo(hull[i].x, hull[i].y);
+        g.closePath();
+        g.strokePath();
+      }
+
+      const hb = f.hurtboxRect();
+      g.lineStyle(2, 0x39ff14, 0.9);
+      g.strokeRect(hb.x, hb.y, hb.width, hb.height);
+
+      const hit = f.currentHitbox();
+      if (hit) {
+        g.fillStyle(0xff2d2d, 0.15);
+        g.fillRect(hit.x, hit.y, hit.width, hit.height);
+        g.lineStyle(2, 0xff2d2d, 1);
+        g.strokeRect(hit.x, hit.y, hit.width, hit.height);
+      }
+    }
+
+    this.debugText.setText([
+      'DEBUG (F1)  green=hurtbox  cyan=collision.json hull  red=hitbox  white=body  yellow=feet',
+      `1P  ${this.player.debugLabel()}`,
+      `${this.p2IsCpu ? 'CPU' : '2P'}  ${this.opponent.debugLabel()}`,
+      `gap ${Math.round(Math.abs(this.opponent.x - this.player.x))}px   fps ${Math.round(this.game.loop.actualFps)}`,
+    ]);
+  }
+
   private handleResize(gameSize: Phaser.Structs.Size) {
     const w = gameSize.width;
     const h = gameSize.height;
@@ -178,6 +251,8 @@ export class BattleScene extends Phaser.Scene {
       this.frameAccumulatorMs -= FRAME_MS;
       this.tick();
     }
+
+    this.drawDebug();
   }
 
   /** One fixed simulation frame. */

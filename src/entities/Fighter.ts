@@ -1,6 +1,13 @@
 import Phaser from 'phaser';
-import type { CharacterDef, PoseName } from '../data/characters';
-import { poseKey, POSE_SCALE_CORRECTION } from '../data/characters';
+import type { CharacterDef, MotionId } from '../data/characters';
+import {
+  motionKey,
+  collisionKey,
+  koFrameKey,
+  KO_SEQUENCE_LENGTH,
+  KO_SOURCE_REF_HEIGHT,
+} from '../data/characters';
+import { normalizedBounds, type CollisionFile } from '../data/collision';
 import type { FighterInput } from './FighterInput';
 
 export type FighterState = 'idle' | 'walk' | 'jump' | 'attack' | 'hitstun' | 'guard' | 'ko';
@@ -8,19 +15,14 @@ type AttackPhase = 'startup' | 'active' | 'recovery' | null;
 
 // Velocities stay in px/second — Phaser's Arcade physics integrates them, and
 // with fixedStep physics at 60fps that is already deterministic. Everything
-// that counts down (attack phases, hitstun, pose timers) is in FRAMES.
+// that counts down (attack phases, hitstun) is in FRAMES.
 const MOVE_SPEED = 340;
 const JUMP_VY = -1400;
 const JUMP_VX = 340;
 const GUARD_FLASH_F = 9; // ~150ms — brief blue tint on a successful guard
 const HITSTUN_F = 23; // ~380ms
-const HIT_POSE1_F = 9; // ~150ms — initial snap-back pose before the deeper recoil
-const MAX_HP = 100;
-const IDLE_POSE_SWITCH_F = 19; // ~320ms per idle breathing frame
-const WALK_POSE_SWITCH_F = 8; // ~130ms per walk frame
 const KO_FRAME_F = 8; // ~130ms per knockdown frame
-const IDLE_POSES: PoseName[] = ['idle1', 'idle2', 'idle3', 'idle4'];
-const KO_POSES: PoseName[] = ['down1', 'down2', 'down3', 'down4', 'down5', 'down6'];
+const MAX_HP = 100;
 /** Knockback per melee hit, as a fraction of screen width (spec: 1/10; tuned
  * down to keep the 2-hit auto-chain combo actually reachable). */
 const KNOCKBACK_SCREEN_RATIO = 0.02;
@@ -80,12 +82,13 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
   isBacking = false;
 
   readonly def: CharacterDef;
-  /** Display width of the standing pose, fixed at spawn — used for spacing
-   * (push-apart) so a wide attack pose (e.g. an extended punch) doesn't
-   * momentarily inflate the required gap and shove the opponent out of range. */
+  /** Width of the idle hurtbox at spawn (world px) — used for push-apart
+   * spacing so a wide attack/hit frame doesn't momentarily inflate the gap. */
   readonly baseWidth: number;
   private readonly baseScale: number;
   private readonly stageWidth: number;
+  private readonly groundY: number;
+  private readonly collision: CollisionFile | null;
 
   private attackKey: string | null = null;
   private attackPhase: AttackPhase = null;
@@ -99,22 +102,26 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
   private guardFlashFrames = 0;
 
   private readonly hasFrames: boolean;
-  private currentPose: PoseName | null = null;
-  private idlePoseFrames = 0;
-  private idlePoseIndex = 0;
-  private walkPoseFrames = 0;
-  private walkPoseAlt = false;
+  private currentMotion: MotionId | null = null;
   private jumpDirection: 'neutral' | 'forward' | 'back' = 'neutral';
-  private koPoseFrames = 0;
+
+  /** Knockdown is a 6-frame sequence (see characters.ts). */
   private koFrameIndex = 0;
+  private koFrameFrames = 0;
+  private readonly koScale: number;
 
   constructor(scene: Phaser.Scene, x: number, y: number, def: CharacterDef, stageWidth: number) {
-    const initialTexture =
-      def.hasFrames && def.portraitKey ? poseKey(def.portraitKey, 'idle1') : def.portraitKey ?? '__MISSING';
+    const framed = def.hasFrames && def.portraitKey;
+    const initialTexture = framed ? motionKey(def.portraitKey!, 'idle') : def.portraitKey ?? '__MISSING';
     super(scene, x, y, initialTexture);
     this.def = def;
     this.stageWidth = stageWidth;
-    this.hasFrames = def.hasFrames;
+    this.groundY = y;
+    this.hasFrames = !!framed;
+    this.collision =
+      framed && scene.cache.json.exists(collisionKey(def.portraitKey!))
+        ? (scene.cache.json.get(collisionKey(def.portraitKey!)) as CollisionFile)
+        : null;
 
     scene.add.existing(this);
     scene.physics.add.existing(this);
@@ -123,28 +130,114 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
     const targetHeight = scene.scale.height * 0.4;
     this.baseScale = targetHeight / this.height;
     this.setScale(this.baseScale);
-    this.baseWidth = this.displayWidth;
+    if (this.hasFrames) this.currentMotion = 'idle';
+
+    const idle = normalizedBounds(this.collision, 'idle');
+    this.baseWidth = idle.width * this.displayWidth;
+
+    // KO frames were authored on a different (smaller) sheet, so rescale them
+    // so the standing figure in frame 1 matches the current art's height.
+    this.koScale = this.baseScale * ((idle.height * this.height) / KO_SOURCE_REF_HEIGHT);
 
     const body = this.body as Phaser.Physics.Arcade.Body;
     body.setCollideWorldBounds(true);
-    body.setSize(this.width * 0.5, this.height * 0.94);
-    body.setOffset(this.width * 0.25, this.height * 0.06);
+    // Body is the alpha-derived idle box, held fixed for all motions so it
+    // stays stable. Its bottom edge is pinned to the sprite's feet
+    // (origin 0.5, 1) so onFloor() lines up regardless of the frame shown.
+    const topPx = idle.y * this.height;
+    body.setSize(idle.width * this.width, this.height - topPx);
+    body.setOffset(idle.x * this.width, topPx);
   }
 
-  private setPose(pose: PoseName) {
-    if (!this.hasFrames || !this.def.portraitKey || this.currentPose === pose) return;
-    this.currentPose = pose;
-    this.setTexture(poseKey(this.def.portraitKey, pose));
-    this.setScale(this.baseScale * (POSE_SCALE_CORRECTION[pose] ?? 1));
+  /** The motion PNG that represents the current state. */
+  private motionForState(): MotionId {
+    switch (this.state) {
+      case 'walk':
+        // No dedicated walk art — the neutral stance reads better than the
+        // old stance⇄guard flicker.
+        return 'idle';
+      case 'jump':
+        return this.jumpDirection === 'forward'
+          ? 'jump_forward'
+          : this.jumpDirection === 'back'
+            ? 'jump_backward'
+            : 'jump_vertical';
+      case 'attack':
+        if (this.isAerialAttack) return 'jump_attack';
+        return this.attackPhase === 'startup' ? 'idle' : 'attack';
+      case 'guard':
+        return 'backward_guard';
+      case 'hitstun':
+        return 'hit';
+      case 'ko':
+        return 'down';
+      default:
+        return 'idle';
+    }
+  }
 
-    // Each pose frame is cropped to its own bounding box, so its raw pixel
-    // size differs from the reference (idle1) frame the body was sized for.
-    // Re-fit the body every time, keeping offsetY + bodyHeight == height so
-    // the body's bottom edge always lines up with the origin(0.5,1) anchor
-    // (the character's feet), regardless of which pose is showing.
-    const body = this.body as Phaser.Physics.Arcade.Body;
-    body.setSize(this.width * 0.5, this.height * 0.94);
-    body.setOffset(this.width * 0.25, this.height * 0.06);
+  private setMotion(motion: MotionId) {
+    if (!this.hasFrames || !this.def.portraitKey || this.currentMotion === motion) return;
+    this.currentMotion = motion;
+    this.setTexture(motionKey(this.def.portraitKey, motion));
+    // All motion frames share the 1536px canvas, so the spawn scale still
+    // holds and the physics body does not need refitting.
+    this.setScale(this.baseScale);
+  }
+
+  /** Maps a point given in 0..1 image space (origin top-left) to world
+   * coordinates, honouring origin (0.5, 1), scale and facing. */
+  private imagePointToWorld(nx: number, ny: number): { x: number; y: number } {
+    const w = this.displayWidth;
+    const h = this.displayHeight;
+    const x = this.facing === -1 ? this.x + (0.5 - nx) * w : this.x + (nx - 0.5) * w;
+    return { x, y: this.y + (ny - 1) * h };
+  }
+
+  /** World-space AABB of the character's vulnerable area for the motion
+   * currently showing, derived from `collision.json`. */
+  hurtboxRect(): Phaser.Geom.Rectangle {
+    const nb = normalizedBounds(this.collision, this.motionForState());
+    const a = this.imagePointToWorld(nb.x, nb.y);
+    const b = this.imagePointToWorld(nb.x + nb.width, nb.y + nb.height);
+    const left = Math.min(a.x, b.x);
+    const top = Math.min(a.y, b.y);
+    return new Phaser.Geom.Rectangle(left, top, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  }
+
+  /** World-space outline of the current motion's collision hull (debug only).
+   * Empty when the motion has no `collision.json` entry (e.g. the KO frames). */
+  hurtboxPolygon(): Phaser.Math.Vector2[] {
+    const frame = this.collision?.frames?.[this.motionForState()];
+    if (!frame) return [];
+    return frame.normalizedPolygon.map((p) => {
+      const w = this.imagePointToWorld(p.x, p.y);
+      return new Phaser.Math.Vector2(w.x, w.y);
+    });
+  }
+
+  /** The live attack hitbox this frame, or null when no hitbox is out. */
+  currentHitbox(): Phaser.Geom.Rectangle | null {
+    if (this.attackPhase !== 'active' || !this.attackKey) return null;
+    const def = ATTACKS[this.attackKey];
+    return new Phaser.Geom.Rectangle(
+      this.facing === 1 ? this.x : this.x - def.rangeX,
+      this.y + def.offsetY - def.rangeY / 2,
+      def.rangeX,
+      def.rangeY
+    );
+  }
+
+  /** One-line status string for the debug overlay. */
+  debugLabel(): string {
+    const phase = this.attackPhase ? `:${this.attackPhase}(${this.phaseFrames})` : '';
+    const extra =
+      this.state === 'hitstun'
+        ? ` ${this.hitstunFrames}`
+        : this.state === 'ko'
+          ? ` ${this.koFrameIndex + 1}/${KO_SEQUENCE_LENGTH}`
+          : '';
+    return `${this.state}${phase}${extra}  hp:${this.hp}  face:${this.facing > 0 ? '→' : '←'}`;
   }
 
   /** Advances this fighter by exactly one fixed simulation frame (1/60s). */
@@ -164,18 +257,19 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
       this.clearTint();
     }
 
-    const grounded = body.onFloor();
-
     if (this.state === 'ko') {
-      body.setVelocityX(0);
-      this.updateVisualPose(body);
+      // Body is disabled on KO — just keep the knockdown frames advancing.
+      this.setPosition(this.x, this.groundY);
+      this.updateVisualPose();
       return;
     }
+
+    const grounded = body.onFloor();
 
     if (this.hitstunFrames > 0) {
       this.hitstunFrames -= 1;
       this.isBacking = false;
-      this.updateVisualPose(body);
+      this.updateVisualPose();
       return;
     }
 
@@ -183,7 +277,7 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
       this.isBacking = false;
       this.updateAttack(input, opponent);
       if (grounded) body.setVelocityX(0);
-      this.updateVisualPose(body);
+      this.updateVisualPose();
       return;
     }
 
@@ -231,68 +325,25 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
       }
     }
 
-    this.updateVisualPose(body);
+    this.updateVisualPose();
   }
 
-  private updateVisualPose(body: Phaser.Physics.Arcade.Body) {
-    if (!this.hasFrames) return;
-
-    switch (this.state) {
-      case 'idle':
-        this.walkPoseFrames = 0;
-        this.walkPoseAlt = false;
-        this.idlePoseFrames -= 1;
-        if (this.idlePoseFrames <= 0) {
-          this.idlePoseFrames = IDLE_POSE_SWITCH_F;
-          this.idlePoseIndex = (this.idlePoseIndex + 1) % IDLE_POSES.length;
+  private updateVisualPose() {
+    if (this.state === 'ko' && this.hasFrames && this.def.portraitKey) {
+      if (this.koFrameIndex < KO_SEQUENCE_LENGTH - 1) {
+        this.koFrameFrames -= 1;
+        if (this.koFrameFrames <= 0) {
+          this.koFrameFrames = KO_FRAME_F;
+          this.koFrameIndex += 1;
         }
-        this.setPose(IDLE_POSES[this.idlePoseIndex]);
-        break;
-      case 'walk':
-        this.walkPoseFrames -= 1;
-        if (this.walkPoseFrames <= 0) {
-          this.walkPoseFrames = WALK_POSE_SWITCH_F;
-          this.walkPoseAlt = !this.walkPoseAlt;
-        }
-        this.setPose(this.walkPoseAlt ? 'walk2' : 'walk1');
-        break;
-      case 'jump':
-        if (body.velocity.y < 0) {
-          const risingPose: PoseName =
-            this.jumpDirection === 'forward'
-              ? 'jump1'
-              : this.jumpDirection === 'back'
-                ? 'jump_back'
-                : 'jump_vertical';
-          this.setPose(risingPose);
-        } else {
-          this.setPose('jump2');
-        }
-        break;
-      case 'attack':
-        this.setPose(this.attackPhase === 'startup' ? 'punch_windup' : 'punch_active');
-        break;
-      case 'guard':
-        this.setPose('guard_stand');
-        break;
-      case 'hitstun':
-        // hitstunFrames counts down from HITSTUN_F: the initial snap plays
-        // first, then it settles into the deeper recoil for the rest.
-        this.setPose(this.hitstunFrames > HITSTUN_F - HIT_POSE1_F ? 'hit2' : 'hit3');
-        break;
-      case 'ko':
-        if (this.koFrameIndex < KO_POSES.length - 1) {
-          this.koPoseFrames -= 1;
-          if (this.koPoseFrames <= 0) {
-            this.koPoseFrames = KO_FRAME_F;
-            this.koFrameIndex += 1;
-          }
-        }
-        this.setPose(KO_POSES[this.koFrameIndex]);
-        break;
-      default:
-        break;
+      }
+      const key = koFrameKey(this.def.portraitKey, this.koFrameIndex + 1);
+      if (this.texture.key !== key) this.setTexture(key);
+      this.setScale(this.koScale);
+      this.currentMotion = null; // so a later state change re-applies its motion
+      return;
     }
+    this.setMotion(this.motionForState());
   }
 
   private startAttack(key: string, wasGrounded: boolean) {
@@ -313,7 +364,7 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
     if (input.heavyAttack) this.bufferedNext = 'heavy';
 
     if (this.attackPhase === 'active' && !this.hasHitThisActive) {
-      this.checkHit(def, opponent);
+      this.checkHit(opponent);
     }
 
     this.phaseFrames -= 1;
@@ -340,19 +391,13 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  private checkHit(def: AttackDef, opponent: Fighter) {
-    const box = new Phaser.Geom.Rectangle(
-      this.facing === 1 ? this.x : this.x - def.rangeX,
-      this.y + def.offsetY - def.rangeY / 2,
-      def.rangeX,
-      def.rangeY
-    );
-    const oppBounds = opponent.getBounds();
-    if (Phaser.Geom.Intersects.RectangleToRectangle(box, oppBounds)) {
+  private checkHit(opponent: Fighter) {
+    const box = this.currentHitbox();
+    if (!box || !this.attackKey) return;
+    if (Phaser.Geom.Intersects.RectangleToRectangle(box, opponent.hurtboxRect())) {
       this.hasHitThisActive = true;
-      const screenWidth = this.stageWidth / 2;
-      const knockback = screenWidth * KNOCKBACK_SCREEN_RATIO;
-      opponent.receiveHit(def.damage, this.facing, this.isAerialAttack, knockback);
+      const knockback = (this.stageWidth / 2) * KNOCKBACK_SCREEN_RATIO;
+      opponent.receiveHit(ATTACKS[this.attackKey].damage, this.facing, this.isAerialAttack, knockback);
     }
   }
 
@@ -383,8 +428,14 @@ export class Fighter extends Phaser.Physics.Arcade.Sprite {
     if (this.hp <= 0) {
       this.state = 'ko';
       this.koFrameIndex = 0;
-      this.koPoseFrames = KO_FRAME_F;
-      body.setVelocityX(0);
+      this.koFrameFrames = KO_FRAME_F;
+      // The knockdown frames come from a different-sized sheet, so the fixed
+      // idle body no longer matches them. Take the KO'd fighter out of physics
+      // entirely and pin its feet to the ground — the down1→down6 sequence is
+      // itself the fall animation.
+      body.setVelocity(0, 0);
+      body.enable = false;
+      this.setPosition(this.x, this.groundY);
     } else {
       this.state = 'hitstun';
     }
