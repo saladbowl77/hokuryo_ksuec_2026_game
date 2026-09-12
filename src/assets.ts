@@ -1,6 +1,5 @@
-import manifest from './sprites.json';
-export type SpriteDefinition={source:string;chromaKey:boolean;scale:number;frames:number[][];extraSheets?:{source:string;scale:number;frames:number[][]}[];animations:Record<string,{frames:number[];ticksPerFrame:number}>};
-export const spriteDefinitions:Record<string,SpriteDefinition>=manifest;
+import {spriteDefinitions,type SpriteDefinition} from './sprite-registry';
+export {spriteDefinitions,type SpriteDefinition} from './sprite-registry';
 export async function loadSpriteFrames(def:SpriteDefinition):Promise<HTMLCanvasElement[]> {
   const image=new Image();image.src=def.source;await image.decode();
   return def.frames.map(([x,y,w,h,bodyAnchor])=>{
@@ -10,7 +9,7 @@ export async function loadSpriteFrames(def:SpriteDefinition):Promise<HTMLCanvasE
     const pixels=ctx.getImageData(0,0,w,h);
     let bottom=0;
     for(let i=0;i<pixels.data.length;i+=4) {
-      const [r,g,b]=pixels.data.slice(i,i+3);
+      const r=pixels.data[i],g=pixels.data[i+1],b=pixels.data[i+2];
       if(def.chromaKey&&r>160&&b>140&&g<110&&r-g>90&&b-g>70) pixels.data[i+3]=0;
       else if(pixels.data[i+3]) bottom=Math.max(bottom,Math.floor(i/4/w));
     }
