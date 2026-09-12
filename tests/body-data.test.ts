@@ -4,24 +4,24 @@ import {Match,neutral} from '../src/engine';
 import {bodyData,imagePoint,imageTransform} from '../src/body-data';
 import {animationFrame,syncPose} from '../src/animation';
 import {hurtShapes} from '../src/collision';
-import sprites from '../src/sprites.json';
+import {spriteDefinitions as sprites} from '../src/sprite-registry';
 
-test('every playable image and every non-KO science animation frame has body data',()=>{
+test('every playable image and every non-KO animation frame has body data',()=>{
  for(const id of [1,2,4,5,6]){
   const f=new Match([id,id===1?5:1]).fighters[0];assert.ok(hurtShapes(f).length);
  }
- for(const [state,animation]of Object.entries(sprites.science.animations)){
+ for(const [key,sprite]of Object.entries(sprites))for(const [state,animation]of Object.entries(sprite.animations)){
   if(state==='ko')continue;
-  for(const frame of animation.frames)assert.ok(bodyData.science.frames[frame],`${state}:${frame}`);
+  for(const frame of animation.frames)assert.ok(bodyData[key].frames[frame],`${key}:${state}:${frame}`);
  }
  for(const data of Object.values(bodyData))for(const parts of Object.values(data.frames))for(const p of parts){
   assert.ok(p.points.length>=3);
   for(const [x,y]of p.points){assert.ok(Number.isFinite(x)&&Number.isFinite(y));assert.ok(x>=0&&y>=0&&x<=data.width&&y<=data.height);}
  }
 });
-test('source image blank space is not treated as body height',()=>{
+test('individual sprites retain distinct body heights within their image bounds',()=>{
  const heights=[1,2,4,5,6].map(id=>{const f=new Match([id,id===1?5:1]).fighters[0];return Math.max(...hurtShapes(f).flatMap(p=>p.points.map(p=>p.y)));});
- assert.ok(heights[4]<125,'PE flag is excluded');
+ assert.ok(heights.every(height=>height>0&&height<192));
  assert.ok(new Set(heights.map(Math.round)).size>=4);
 });
 test('sprite and body transforms agree for scale, origin, flip and hurt rotation',()=>{

@@ -1,4 +1,4 @@
-import manifest from './sprites.json';
+import {spriteDefinitions as manifest} from './sprite-registry';
 import {RULES,type Fighter} from './engine';
 type Definition={animations:Record<string,{frames:number[];ticksPerFrame:number}>};
 const definitions:Record<string,Definition>=manifest;
@@ -10,8 +10,9 @@ export function animationFrame(f:Fighter):number{
  const def=definitions[f.character.key];if(!def)return 0;
  const state=poseState(f),animation=def.animations[state]??(f.attack>=0?def.animations.attack:def.animations.idle);
  const elapsed=f.hp===0?f.koAge:f.takeoff>0?RULES.takeoff-f.takeoff:f.attack>=0?f.attack:f.poseState===state?f.age-f.poseStarted:0;
- const index=Math.floor(elapsed/animation.ticksPerFrame);
+ const stunDuration=f.blocked?RULES.blockstun:RULES.hitstun;
+ const index=f.stun>0&&f.hp>0?Math.floor((stunDuration-f.stun)/stunDuration*animation.frames.length):Math.floor(elapsed/animation.ticksPerFrame);
  const airborne=f.y>0&&f.attack<0&&f.stun===0&&f.hp>0;
- const jumpIndex=f.vy>4?0:f.vy< -4?2:1;
+ const jumpIndex=animation.frames.length===3?(f.vy>4?0:f.vy< -4?2:1):Math.min(animation.frames.length-1,Math.floor(f.airFrames/(f.character.jumpSpeed*120)*animation.frames.length));
  return animation.frames[airborne?Math.min(animation.frames.length-1,jumpIndex):f.hp===0||f.attack>=0||f.takeoff>0||f.stun>0?Math.min(animation.frames.length-1,index):index%animation.frames.length];
 }
