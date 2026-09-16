@@ -1,7 +1,7 @@
 import type { Fighter } from './engine';
 import {animationFrame} from './animation';
 import {bodyData,imagePoint} from './body-data';
-import manifest from './sprites.json';
+import {spriteDefinitions as manifest} from './sprite-registry';
 
 export type Capsule={ax:number;ay:number;bx:number;by:number;r:number;part:string};
 export type Point={x:number;y:number};
@@ -24,7 +24,7 @@ export function hurtShapes(f:Fighter):BodyPolygon[]{
 }
 export function stationaryPush(attacker:Fighter,defender:Fighter):number{
   // Reserve reach against the actual neutral body, including every idle frame.
-  const idle=(manifest as Record<string,{animations:{idle:{frames:number[];ticksPerFrame:number}}}>)[defender.character.key]?.animations.idle;
+  const idle=manifest[defender.character.key]?.animations.idle;
   const samples=idle?.frames.map((_,i)=>i*idle.ticksPerFrame)??[0];
   const direction=defender.x>=attacker.x?1:-1;
   let allowance=0;

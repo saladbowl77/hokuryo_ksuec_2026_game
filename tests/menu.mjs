@@ -48,7 +48,7 @@ try {
   await page.waitForFunction(()=>window.__hokuryo.scene.match.fighters[0].blocked);
   await page.evaluate(()=>{window.__hokuryo.scene.match.paused=true;});await page.waitForTimeout(30);
   frame=await page.evaluate(()=>Number(window.__hokuryo.scene.sprites[0].texture.key.split('-')[1]));
-  assert.ok(frame>=40&&frame<48);await page.screenshot({path:'test-results/guard.png'});
+  assert.ok(frame>=104&&frame<112);await page.screenshot({path:'test-results/guard.png'});
   // A previously created fight scene must not steal input from character selection.
   await page.evaluate(()=>{window.pads[0].axes[0]=0;window.__hokuryo.show('select');});
   await page.waitForTimeout(50);await page.evaluate(()=>{window.pads[0].axes[0]=-1;});await page.waitForTimeout(100);

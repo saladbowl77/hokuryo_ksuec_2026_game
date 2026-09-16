@@ -5,6 +5,8 @@ import {characters,Match} from './engine';
 import {Controls} from './input';
 import {FightScene} from './scene';
 import {loadAllSprites,portraits} from './assets';
+import {spriteDefinitions} from './sprite-registry';
+import {bodyData} from './body-data';
 
 const root=document.querySelector<HTMLDivElement>('#app')!;
 root.innerHTML=`
@@ -100,13 +102,32 @@ $('connect').onclick=async()=>{
   finally{button.disabled=false;}
 };
 // Review is independent from the combat clock and supports frame-by-frame inspection.
-let motion=0,reviewFrame=0,playing=true,flip=false,last=0,fps=10;
-$('idle-motion').onclick=()=>{motion=0;reviewFrame=0;};$('attack-motion').onclick=()=>{motion=8;reviewFrame=0;};
-const jumpReview=document.createElement('button');jumpReview.id='jump-motion';jumpReview.textContent='ジャンプ8コマ';jumpReview.onclick=()=>{motion=16;reviewFrame=0;};$('attack-motion').after(jumpReview);
-for(const [id,label,offset] of [['forward-motion','前進',48],['backward-motion','後退',56],['guard-motion','ガード',40],['crouch-motion','しゃがみ',64],['slide-motion','スライド',72],['air-motion','空中攻撃',80]] as const){
-  const button=document.createElement('button');button.id=id;button.textContent=label;
-  button.onclick=()=>{motion=offset;reviewFrame=0;};jumpReview.before(button);
+let reviewKey='science',motionKey='idle',reviewFrame=0,playing=true,flip=false,last=0,fps=10;
+let reviewSequence:number[]=[];
+const motionNames:Record<string,string>={idle:'待機',forward:'前進',backward:'後退',guard:'ガード',crouch:'しゃがみ',crouchGuard:'しゃがみガード',jump:'ジャンプ',forwardJump:'前ジャンプ',backJump:'後ジャンプ',attack:'地上攻撃',airAttack:'空中攻撃',crouchAttack:'しゃがみ攻撃',slide:'スライド',hit:'被弾',ko:'KO'};
+const motionIds:Record<string,string>={idle:'idle-motion',attack:'attack-motion',jump:'jump-motion',forward:'forward-motion',backward:'backward-motion',guard:'guard-motion',crouch:'crouch-motion',slide:'slide-motion',airAttack:'air-motion',hit:'hit-motion',ko:'ko-motion'};
+document.querySelector('.review-controls')!.innerHTML=`<div class="eyebrow">MOTION VIEWER</div><label>キャラ <select id="review-character"></select></label><h2 id="review-name"></h2><div id="review-motions"></div><button id="review-pause">停止</button><button id="flip">左右反転</button><label><p>再生速度 <span id="fps-label">10</span> fps</p><input id="fps" type="range" min="1" max="24" value="10"></label><label><p>コマ送り <span id="frame-label">1 / 8</span></p><input id="frame" type="range" min="0" max="7" value="0"></label><label><input id="review-body" type="checkbox" style="width:auto"> 体の判定を重ねる</label>`;
+$('review-tab').textContent='モーション確認';
+function setReviewMotion(key:string){
+  motionKey=key;reviewFrame=0;last=0;
+  const def=spriteDefinitions[reviewKey],sequence=def.animations[key].frames;
+  reviewSequence=key==='jump'&&sequence.length<8?[...def.animations.takeoff.frames,...sequence,...def.animations.landing.frames]:sequence;
+  $<HTMLInputElement>('frame').max=String(reviewSequence.length-1);
+  document.querySelectorAll<HTMLButtonElement>('[data-motion]').forEach(b=>b.classList.toggle('primary',b.dataset.motion===key));
 }
+function selectReviewCharacter(){
+  frames=allSprites[reviewKey]??[];
+  const character=characters.find(c=>c.key===reviewKey)!;
+  $('review-name').textContent=`${character.name} · ${character.weapon}`;
+  $('review-motions').replaceChildren();
+  for(const [key,label]of Object.entries(motionNames)){
+    if(!spriteDefinitions[reviewKey]?.animations[key])continue;
+    const button=document.createElement('button');button.id=motionIds[key]??`${key}-motion`;button.dataset.motion=key;button.textContent=label;button.onclick=()=>setReviewMotion(key);$('review-motions').append(button);
+  }
+  setReviewMotion('idle');
+}
+$<HTMLSelectElement>('review-character').innerHTML=characters.filter(c=>spriteDefinitions[c.key]).map(c=>`<option value="${c.key}">${c.name}</option>`).join('');
+$<HTMLSelectElement>('review-character').onchange=e=>{reviewKey=(e.target as HTMLSelectElement).value;selectReviewCharacter();};
 $('review-pause').onclick=()=>{playing=!playing;$('review-pause').textContent=playing?'停止':'再生';};
 $('flip').onclick=()=>{flip=!flip;};
 $<HTMLInputElement>('fps').oninput=e=>{fps=Number((e.target as HTMLInputElement).value);$('fps-label').textContent=String(fps);};
@@ -130,14 +151,17 @@ function review(time:number){
     if(confirmed.every(Boolean)&&!$<HTMLButtonElement>('start').disabled)$('start').click();
   }
   if(view==='review'&&frames.length){
-    if(playing&&time-last>1000/fps){reviewFrame=(reviewFrame+1)%8;last=time;}
+    if(playing&&time-last>1000/fps){reviewFrame=motionKey==='ko'?Math.min(reviewFrame+1,reviewSequence.length-1):(reviewFrame+1)%reviewSequence.length;last=time;}
     const c=$<HTMLCanvasElement>('review-canvas').getContext('2d')!;c.imageSmoothingEnabled=false;
     c.fillStyle='#25383f';c.fillRect(0,0,576,432);
     c.strokeStyle='#3a5056';for(let x=0;x<576;x+=24){c.beginPath();c.moveTo(x,0);c.lineTo(x,432);c.stroke();}
     for(let y=0;y<432;y+=24){c.beginPath();c.moveTo(0,y);c.lineTo(576,y);c.stroke();}
     c.fillStyle='#d5c08a';c.fillRect(40,390,496,2);
-    c.save();c.translate(288,22);c.scale(flip?-2:2,2);c.drawImage(frames[motion+reviewFrame],-87,0);c.restore();
-    $('frame-label').textContent=`${reviewFrame+1} / 8`;$<HTMLInputElement>('frame').value=String(reviewFrame);
+    const frameId=reviewSequence[reviewFrame];
+    c.save();c.translate(288,22);c.scale(flip?-2:2,2);c.drawImage(frames[frameId],-87,0);
+    if($<HTMLInputElement>('review-body').checked&&motionKey!=='ko')for(const polygon of bodyData[reviewKey].frames[frameId]??[]){c.beginPath();polygon.points.forEach(([x,y],i)=>i?c.lineTo(x-87,y):c.moveTo(x-87,y));c.closePath();c.strokeStyle='#ff7d70';c.lineWidth=.6;c.stroke();}
+    c.restore();
+    $('frame-label').textContent=`${reviewFrame+1} / ${reviewSequence.length}`;$<HTMLInputElement>('frame').value=String(reviewFrame);
   }
   requestAnimationFrame(review);
 }
@@ -145,7 +169,7 @@ function fitWindow(){const scale=Math.min(innerWidth/960,innerHeight/540);root.s
 window.addEventListener('resize',fitWindow);fitWindow();
 renderSelection();renderDevices();updateModeLabel();show('select');
 $<HTMLButtonElement>('start').disabled=true;
-try{allSprites=await loadAllSprites();frames=allSprites.science;await document.fonts.load('14px "Press Start 2P"');$<HTMLButtonElement>('start').disabled=false;}
+try{allSprites=await loadAllSprites();selectReviewCharacter();await document.fonts.load('14px "Press Start 2P"');$<HTMLButtonElement>('start').disabled=false;}
 catch(error){$('pick-instruction').textContent='素材の読み込みに失敗しました。ページを再読み込みしてください。';console.error(error);}
 requestAnimationFrame(review);
 // Development-only probe used by browser smoke tests. Not included in production behavior.

@@ -1,0 +1,10 @@
+import original from './sprites.json';
+import pe from './sprite-packs/pe.json';
+import social from './sprite-packs/social.json';
+import math from './sprite-packs/math.json';
+import english from './sprite-packs/english.json';
+import scienceExtra from './sprite-packs/science-extra.json';
+export type SpriteDefinition={source:string;chromaKey:boolean;scale:number;frames:number[][];extraSheets?:{source:string;scale:number;frames:number[][]}[];animations:Record<string,{frames:number[];ticksPerFrame:number}>};
+const range=(start:number)=>Array.from({length:8},(_,i)=>start+i);
+const science:SpriteDefinition={...original.science,extraSheets:[...original.science.extraSheets,scienceExtra],animations:{...original.science.animations,hit:{frames:range(96),ticksPerFrame:2},guard:{frames:range(104),ticksPerFrame:2},crouchGuard:{frames:range(112),ticksPerFrame:2}}};
+export const spriteDefinitions:Record<string,SpriteDefinition>={science,pe,social,math,english};
